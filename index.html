@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Decentralized Storage v4 — Upload & Chunk</title>
+  <style>
+    :root{
+      --bg:#fbfdff; --card:#ffffff; --muted:#6b7280; --accent:#2563eb;
+      --accent-2:#0ea5a4; --success:#16a34a; --danger:#ef4444;
+      --radius:10px; --shadow: 0 6px 18px rgba(19, 19, 24, 0.06);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+    }
+    body{background:var(--bg); margin:0; padding:28px; color:#0f172a}
+    .container{max-width:1100px; margin:0 auto}
+    header{display:flex; gap:12px; align-items:center; margin-bottom:18px}
+    h1{font-size:20px; margin:0 0 0 6px}
+    .card{background:var(--card); border-radius:var(--radius); box-shadow:var(--shadow); padding:18px; margin-bottom:16px}
+    .small{font-size:0.9rem; color:var(--muted)}
+    .muted{color:var(--muted)}
+    .row{display:flex; gap:12px; align-items:center}
+    input[type="file"]{padding:6px}
+    .btn{background:var(--accent); color:white; border:none; padding:8px 12px; border-radius:8px; cursor:pointer; font-weight:600}
+    .btn.secondary{background:#475569}
+    .btn.ghost{background:transparent; color:var(--accent); border:1px solid #e6eefb}
+    .blocks {display:grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap:12px; margin-top:12px}
+    .block-card{padding:12px; border-radius:10px; border:1px solid #edf2f7; background:linear-gradient(180deg,#fff,#fbfdff)}
+    .meta{display:flex; gap:10px; align-items:center; margin-bottom:8px}
+    .meta .title{font-weight:700}
+    .chunks{margin-top:8px}
+    .chunk{display:flex; align-items:center; gap:8px; padding:8px; border-radius:8px; background:#fff; border:1px solid #f1f5f9; margin-bottom:6px}
+    .badge{font-size:0.8rem; padding:6px 8px; border-radius:8px; background:#f8fafc; color:#111827}
+    .node-id{font-weight:700; color:var(--accent)}
+    .inline {display:inline-flex; gap:8px; align-items:center}
+    pre.json {background:#0b1220; color:#cde6ff; padding:12px; border-radius:8px; overflow:auto; font-size:12px}
+    .login-row{margin-left:auto}
+    .notice{font-size:0.9rem;color:var(--muted)}
+    .header-right{display:flex; gap:10px; align-items:center; margin-left:auto}
+    .small-link{color:var(--accent); cursor:pointer; text-decoration:underline}
+    footer{font-size:13px;color:var(--muted); margin-top:18px}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" aria-hidden>
+        <rect width="24" height="24" rx="6" fill="#eef2ff"></rect>
+        <path d="M6 12h12M12 6v12" stroke="#4f46e5" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <div>
+        <h1>Decentralized Storage v4</h1>
+        <div class="small muted">Upload → chunk → distribute to peers → record on blockchain</div>
+      </div>
+
+      <div class="header-right">
+        <div id="userArea" class="small muted">Not signed in</div>
+        <button id="loginBtn" class="btn ghost">Login</button>
+        <button id="logoutBtn" class="btn secondary" style="display:none">Logout</button>
+      </div>
+    </header>
+
+    <!-- upload card -->
+    <div class="card">
+      <h3 style="margin-top:0">Upload a file</h3>
+      <div style="display:flex;gap:10px;align-items:center">
+        <input id="fileInput" type="file" />
+        <button id="uploadBtn" class="btn">Upload & Chunk</button>
+        <div id="uploadResult" class="notice"></div>
+      </div>
+      <div class="small muted" style="margin-top:10px">Chunk size: <span id="chunkSizeLabel"></span></div>
+    </div>
+
+    <!-- chain explorer -->
+    <div class="card">
+      <div style="display:flex;align-items:center;gap:10px">
+        <h3 style="margin:0">Blockchain explorer</h3>
+        <button id="refreshChain" class="btn secondary" style="margin-left:10px">Refresh</button>
+        <div class="small muted" style="margin-left:8px">Click <strong>Download</strong> to reassemble & download a stored file</div>
+      </div>
+      <div id="blocksContainer" class="blocks" style="margin-top:12px"></div>
+    </div>
+
+    <!-- chunks inspector -->
+    <div class="card">
+      <h3 style="margin-top:0">Chunks inspector</h3>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input id="storedName" placeholder="stored_name (timestamp_filename)" />
+        <button id="inspectChunks" class="btn secondary">List chunks</button>
+      </div>
+      <pre id="chunksView" class="json" style="height:220px; margin-top:10px">(chunks will appear here)</pre>
+    </div>
+
+    <footer>Tip: start three peer nodes and the backend, then upload. Chunks will appear in each peer's <code>node_data</code> folder.</footer>
+  </div>
+
+  <script>
+    // no const CHUNK_SIZE here — we’ll fetch from /_config at runtime
+    let CHUNK_SIZE_VALUE = null;
+
+    const fileInput = document.getElementById('fileInput');
+    const uploadBtn = document.getElementById('uploadBtn');
+    const uploadResult = document.getElementById('uploadResult');
+
+    const refreshChainBtn = document.getElementById('refreshChain');
+    const blocksContainer = document.getElementById('blocksContainer');
+
+    const inspectBtn = document.getElementById('inspectChunks');
+    const storedNameInput = document.getElementById('storedName');
+    const chunksView = document.getElementById('chunksView');
+
+    const loginBtn = document.getElementById('loginBtn');
+    const logoutBtn = document.getElementById('logoutBtn');
+    const userArea = document.getElementById('userArea');
+
+    function el(name, attrs={}, inner="") {
+      const d = document.createElement(name);
+      for (const k in attrs) d.setAttribute(k, attrs[k]);
+      if (inner) d.innerHTML = inner;
+      return d;
+    }
+
+    async function checkAuth() {
+      try {
+        const r = await fetch('/auth/status');
+        const j = await r.json();
+        if (j.logged_in) {
+          userArea.innerText = `Signed in as ${j.user}`;
+          loginBtn.style.display = 'none';
+          logoutBtn.style.display = 'inline-block';
+          uploadBtn.disabled = false;
+        } else {
+          userArea.innerText = 'Not signed in';
+          loginBtn.style.display = 'inline-block';
+          logoutBtn.style.display = 'none';
+          uploadBtn.disabled = true;
+        }
+      } catch(e) {
+        console.warn('auth/status error', e);
+      }
+    }
+
+    loginBtn.addEventListener('click', async () => {
+      const user = prompt('Enter username:', 'admin');
+      if (!user) return;
+      const pass = prompt('Enter password:');
+      if (pass === null) return;
+      try {
+        const r = await fetch('/login', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({username: user, password: pass})
+        });
+        const j = await r.json();
+        if (!r.ok) {
+          alert('Login failed: ' + (j.error || JSON.stringify(j)));
+        } else {
+          await checkAuth();
+        }
+      } catch (err) {
+        alert('Network error: ' + err);
+      }
+    });
+
+    logoutBtn.addEventListener('click', async () => {
+      await fetch('/logout', {method:'POST'});
+      await checkAuth();
+    });
+
+    uploadBtn.addEventListener('click', async () => {
+      const f = fileInput.files[0];
+      if (!f) return alert('Select a file first');
+      uploadResult.innerText = 'Uploading & chunking...';
+      const fd = new FormData();
+      fd.append('file', f);
+      try {
+        const r = await fetch('/upload_and_chunk', { method:'POST', body: fd });
+        const j = await r.json();
+        if (!r.ok) {
+          uploadResult.innerText = 'Error: ' + JSON.stringify(j);
+        } else {
+          uploadResult.innerText = `OK — stored_name: ${j.metadata.stored_name} chunks: ${j.metadata.chunk_count}`;
+          await refreshChain();
+        }
+      } catch (err) {
+        uploadResult.innerText = 'Network error: ' + err;
+      }
+    });
+
+    refreshChainBtn.addEventListener('click', refreshChain);
+    async function refreshChain() {
+      blocksContainer.innerHTML = 'Loading...';
+      try {
+        const r = await fetch('/chain');
+        const chain = await r.json();
+        renderChain(chain);
+      } catch (e) {
+        blocksContainer.innerHTML = `<div class="small">Error loading chain: ${e}</div>`;
+      }
+    }
+
+    function renderChain(chain) {
+      blocksContainer.innerHTML = '';
+      if (!Array.isArray(chain) || chain.length === 0) {
+        blocksContainer.innerHTML = '<div class="small">Chain empty</div>';
+        return;
+      }
+      chain.slice().reverse().forEach(entry => {
+        const card = el('div', {class:'block-card'});
+        const header = el('div', {class:'meta'});
+        const idxSpan = el('div', {}, `<div class="small muted">Index</div><div class="title">${entry.index ?? ''}</div>`);
+        const tsSpan = el('div', {}, `<div class="small muted">When</div><div>${entry.timestamp ? new Date(entry.timestamp*1000).toLocaleString() : ''}</div>`);
+        header.appendChild(idxSpan);
+        header.appendChild(tsSpan);
+
+        const metaWrap = el('div', {style:'margin-top:8px'});
+        (entry.metadata || []).forEach((meta,i,arr) => {
+          const metaBox = el('div', {}, `<div style="display:flex;align-items:center;gap:10px"><div style="font-weight:700">${meta.filename || '(file)'}</div><div class="small muted">${meta.stored_name || ''}</div></div>`);
+          const chunksEl = el('div', {class:'chunks'});
+          if (Array.isArray(meta.chunks) && meta.chunks.length) {
+            meta.chunks.forEach(c => {
+              const node = c.node_id || 'unknown';
+              const short = c.hash ? c.hash.slice(0,12) : '(hash)';
+              const ch = el('div', {class:'chunk'}, `<div class="badge">#${c.index}</div><div style="flex:1"><strong>${short}</strong><div class="small muted">node: <span class="node-id">${node}</span></div></div>`);
+              chunksEl.appendChild(ch);
+            });
+          } else if (Array.isArray(meta.chunk_hashes)) {
+            meta.chunk_hashes.forEach((h,i)=> {
+              const ch = el('div', {class:'chunk'}, `<div class="badge">#${i}</div><div style="flex:1"><strong>${h.slice(0,12)}</strong></div>`);
+              chunksEl.appendChild(ch);
+            });
+          }
+          const btnWrap = el('div', {style:'margin-top:8px'});
+          const link = `/download/${encodeURIComponent(meta.stored_name || '')}`;
+          const dlBtn = el('a', {class:'download-link', href:link}, `<button class="btn">Download</button>`);
+          btnWrap.appendChild(dlBtn);
+
+          metaBox.appendChild(chunksEl);
+          metaBox.appendChild(btnWrap);
+          metaWrap.appendChild(metaBox);
+          if (i < arr.length-1) metaWrap.appendChild(el('hr'));
+        });
+
+        card.appendChild(header);
+        card.appendChild(metaWrap);
+        card.appendChild(el('div', {class:'small muted', style:'margin-top:8px'}, `Hash: ${entry.hash || ''}`));
+        blocksContainer.appendChild(card);
+      });
+    }
+
+    inspectBtn.addEventListener('click', async () => {
+      const stored = storedNameInput.value.trim();
+      if (!stored) return alert('Enter stored_name');
+      chunksView.innerText = 'Loading...';
+      try {
+        const r = await fetch('/chunks/' + encodeURIComponent(stored));
+        if (!r.ok) {
+          chunksView.innerText = 'Error: ' + JSON.stringify(await r.json());
+          return;
+        }
+        const j = await r.json();
+        chunksView.innerText = JSON.stringify(j, null, 2);
+      } catch (e) {
+        chunksView.innerText = 'Network error: ' + e;
+      }
+    });
+
+    (async () => {
+      await checkAuth();
+      await refreshChain();
+      try {
+        const r = await fetch('/_config');
+        if (r.ok) {
+          const cfg = await r.json();
+          document.getElementById('chunkSizeLabel').innerText = cfg.chunk_size + ' bytes';
+          CHUNK_SIZE_VALUE = cfg.chunk_size;
+        } else {
+          document.getElementById('chunkSizeLabel').innerText = '—';
+        }
+      } catch (e) {
+        document.getElementById('chunkSizeLabel').innerText = '—';
+      }
+    })();
+  </script>
+</body>
+</html>
